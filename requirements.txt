@@ -3,3 +3,12 @@ embeddings>=0.0.7
 revtok>=0.0.3
 gym>=0.15.4
 py-getch==1.0.1
+
+certifi==2020.12.5
+cloudpickle==1.6.0
+future==0.18.2
+numpy>=1.20.1
+opencv-python==4.5.1.48
+Pillow==7.2.0
+pyglet==1.5.0
+scipy==1.6.1

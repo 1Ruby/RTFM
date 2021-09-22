@@ -4,6 +4,7 @@ logs/
 *.ipynb
 .ipynb_checkpoints/
 __pycache__/
+*/__pycache__/
 *.py[cod]
 *$py.class
 *.yml
