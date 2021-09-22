@@ -10,11 +10,10 @@ Model description is a vector with dim=4 in field ('coin', 'water', 'wall')
 Init pos and goal are at diagonal rooms.
 Wall number is at most 1, so the agent can reach the goal.
 """
-from abc import ABC
 from .fourrooms import *
-from ..utils.wrapper.wrappers import ImageInputWrapper
-from ..utils.test_util import *
+from ..utils.env_utils.rtfm_util import *
 import numpy as np
+from vocab import Vocab
 from ..utils.env_utils.fourrooms_util import *
 
 
@@ -161,8 +160,60 @@ class FourroomsGate(FourroomsBase):
         blocks.extend(self.make_basic_blocks())
         return self.render_with_blocks(self.origin_background, blocks)
 
-if __name__ == '__main__':
-    # basic test
-    env_origin = ImageInputWrapper(FourroomsGate())
-    check_render(env_origin)
-    check_run(env_origin)
+
+class FourroomsRTFM(FourroomsGate):
+    def __init__(self, featurizer, max_iter=1000, max_placement=1, max_name=8, max_inv=10, max_wiki=80, max_self=40, mode='train', modeuse='default'):
+        self.featurizer = featurizer
+        self.max_iter = max_iter
+        self.max_placement = max_placement
+        self.max_name = max_name
+        self.max_inv = max_inv
+        self.max_wiki = max_wiki
+        self.max_self = max_self
+
+        if modeuse == "default":
+            self.mode = mode
+        else:
+            self.mode = modeuse
+
+        self.vocab = Vocab(['pad', 'eos', ''])
+        self.vocab.word2index(wordlist, train=True)
+        super().__init__(mode=self.mode)
+        self.iter = 0
+        self.observation_space = self.featurizer.get_observation_space(self)
+
+    def reset(self):
+        super().reset()
+        self.iter = 0
+        return self.featurizer.featurize(self)
+
+    def step(self, action):
+        obs, reward, done, info = super().step(action)
+        self.iter += 1
+        return self.featurizer.featurize(self), reward, done, info
+    
+    def read_model(self):
+        sentence = [self.Model[pos] for pos in gates_pos]
+        return sentence
+    
+    def read_pos(self, row, col, eos, pad):
+        names = []
+        lens = []
+        pos = self.tostate.get((row, col), -1)
+        if pos == self.state.position_n:
+            name, length = read_things(self.vocab, 'agent', self.max_name, eos, pad)
+            names.append(name)
+            lens.append(length)
+        if pos == self.state.goal_n:
+            name, length = read_things(self.vocab, 'goal', self.max_name, eos, pad)
+            names.append(name)
+            lens.append(length)
+        if self.occupancy[row, col]:
+            name, length = read_things(self.vocab, 'wall', self.max_name, eos, pad)
+            names.append(name)
+            lens.append(length)
+        if pos in gates_pos and self.gate_list[gates_pos.index(pos)] == 1:
+            name, length = read_things(self.vocab, 'gate', self.max_name, eos, pad)
+            names.append(name)
+            lens.append(length)
+        return names, lens
