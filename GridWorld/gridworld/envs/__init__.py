@@ -10,7 +10,7 @@ from gym.envs.registration import register
 
 register(
     id='fourrooms_base-v0',
-    entry_point='GridwWorld.gridworld.envs:FourroomsBase'
+    entry_point='GridWorld.gridworld.envs:FourroomsBase'
 )
 
 register(
@@ -25,25 +25,25 @@ register(
 
 register(
     id='fourrooms_gate-v0',
-    entry_point='GridwWorld.gridworld.envs:FourroomsGate'
+    entry_point='GridWorld.gridworld.envs:FourroomsGate'
 )
 
 register(
     id='fourrooms_gate_rtfm-v0',
-    entry_point='GridwWorld.gridworld.envs:FourroomsRTFM'
+    entry_point='GridWorld.gridworld.envs:FourroomsRTFM'
 )
 
 register(
     id='ninerooms_base-v0',
-    entry_point='GridwWorld.gridworld.envs:NineroomsBase'
+    entry_point='GridWorld.gridworld.envs:NineroomsBase'
 )
 
 register(
     id='ninerooms_gate-v1',
-    entry_point='GridwWorld.gridworld.envs:NineroomsGate'
+    entry_point='GridWorld.gridworld.envs:NineroomsGate'
 )
 
 register(
     id='ninerooms_gate-v2',
-    entry_point='GridwWorld.gridworld.envs:NineroomsGateV2'
+    entry_point='GridWorld.gridworld.envs:NineroomsGateV2'
 )
