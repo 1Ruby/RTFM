@@ -18,9 +18,8 @@ class Model(nn.Module):
     @classmethod
     def create_env(cls, flags, featurizer=None):
         f = featurizer or X.Concat([X.Text(), X.ValidMoves()])
-        print('loading env')
         start_time = time.time()
-        env = gym.make(flags.env, room_shape=(flags.height, flags.width), partially_observable=flags.partial_observability, max_placement=flags.max_placement, featurizer=f, shuffle_wiki=flags.shuffle_wiki, time_penalty=flags.time_penalty)
+        env = gym.make(flags.env, featurizer=f, max_placement=flags.max_placement)
         print('loaded env in {} seconds'.format(time.time() - start_time))
         return env
 
