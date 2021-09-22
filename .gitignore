@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 checkpoints/
+runs/
 logs/
 *.ipynb
 .ipynb_checkpoints/

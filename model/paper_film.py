@@ -41,7 +41,7 @@ class Model(Base):
 
     @classmethod
     def make(cls, flags, env):
-        return cls(env.observation_space, len(env.action_space), flags.height, flags.width, env.vocab, demb=flags.demb, drnn=flags.drnn, drnn_small=flags.drnn_small, drep=flags.drep, disable_wiki=flags.wiki == 'no')
+        return cls(env.observation_space, env.action_space.n, flags.height, flags.width, env.vocab, demb=flags.demb, drnn=flags.drnn, drnn_small=flags.drnn_small, drep=flags.drep, disable_wiki=flags.wiki == 'no')
 
     def __init__(self, observation_shape, num_actions, room_height, room_width, vocab, demb, drnn, drnn_small, drep, pretrained_emb=False, disable_wiki=False):
         super().__init__(observation_shape, num_actions, room_height, room_width, vocab, demb, drnn, drep, pretrained_emb, disable_wiki=disable_wiki)

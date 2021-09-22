@@ -162,14 +162,14 @@ class FourroomsGate(FourroomsBase):
 
 
 class FourroomsRTFM(FourroomsGate):
-    def __init__(self, featurizer, max_iter=1000, max_placement=1, max_name=8, max_inv=10, max_wiki=80, max_self=40, mode='train', modeuse='default'):
+    def __init__(self, featurizer, max_iter=1000, max_placement=1, max_name=8, max_inv=10, max_wiki=80, max_task=40, mode='train', modeuse='default'):
         self.featurizer = featurizer
         self.max_iter = max_iter
         self.max_placement = max_placement
         self.max_name = max_name
         self.max_inv = max_inv
         self.max_wiki = max_wiki
-        self.max_self = max_self
+        self.max_task = max_task
 
         if modeuse == "default":
             self.mode = mode

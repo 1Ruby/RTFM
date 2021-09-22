@@ -54,7 +54,7 @@ def get_parser():
                         help='Disable saving checkpoint.')
     parser.add_argument('--savedir', default='checkpoints',
                         help='Root dir where experiment data will be saved.')
-    parser.add_argument('--num_actors', default=30, type=int, metavar='N',
+    parser.add_argument('--num_actors', default=20, type=int, metavar='N',
                         help='Number of actors.')
     parser.add_argument('--test_actors', default=3, type=int, metavar='N',
                         help='Number of test actors.')

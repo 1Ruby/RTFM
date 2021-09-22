@@ -99,7 +99,7 @@ def act(i: int, free_queue: mp.SimpleQueue, full_queue: mp.SimpleQueue,
         epoch = 0
         episode = 0
         
-        if i == 0 or (flags.fix_env and i < flags.log_actors):
+        if i == 0:
             tag = flags.mode + ' actor ' + str(i)
             writer = SummaryWriter(write_path + '/' + tag)
             if hasattr(env.gym_env, 'color_render'):
@@ -134,7 +134,7 @@ def act(i: int, free_queue: mp.SimpleQueue, full_queue: mp.SimpleQueue,
 
                 env_output = env.step(agent_output['action'])
                 epoch += 1
-                if (i == 0 or (flags.fix_env and i < flags.log_actors)) and episode % 1e4 == 0:
+                if i == 0 and episode % 1e4 == 0:
                     if hasattr(env.gym_env, 'color_render'):
                         img = torch.tensor(env.gym_env.color_render()).transpose(0, 2).transpose(1, 2)
                     else:
