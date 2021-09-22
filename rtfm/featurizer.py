@@ -8,8 +8,10 @@ import os
 import torch
 import revtok
 import random
+import numpy as np
 from pprint import pprint
 from rtfm.dynamics import monster as M, item as I, world_object as O, event as E
+from GridWorld.gridworld.utils.env_utils.rtfm_util import read_things
 
 
 class Featurizer:
@@ -37,60 +39,40 @@ class Concat(Featurizer, list):
 
 
 class ValidMoves(Featurizer):
-
-    def can_move_to(self, agent, pos, world):
-        x, y = pos
-        existing = world.get_objects_at_pos((x, y))
-        can_inhabit = all([agent.can_inhabit_cell(o) for o in existing])
-        return 0 <= x < world.width and 0 <= y <= world.height and can_inhabit
-
+    #  valid actions: [1, 1, 1, 1] in our gridworld
     def get_observation_space(self, task):
-        return {'valid': (len(M.BaseMonster.valid_moves), )}
+        return {'valid': (task.action_space.n,)}
 
     def featurize(self, task):
-        valid = set(M.BaseMonster.valid_moves)
-        if task.agent is not None and task.agent.position is not None:
-            x, y = task.agent.position
-            if not self.can_move_to(task.agent, (x-1, y), task.world):
-                valid.remove(E.Left)
-            if not self.can_move_to(task.agent, (x+1, y), task.world):
-                valid.remove(E.Right)
-            if not self.can_move_to(task.agent, (x, y-1), task.world):
-                valid.remove(E.Up)
-            if not self.can_move_to(task.agent, (x, y+1), task.world):
-                valid.remove(E.Down)
-        return {'valid': torch.tensor([a in valid for a in M.BaseMonster.valid_moves], dtype=torch.float)}
-
+        return {'valid': torch.tensor([1, 1, 1, 1], dtype=torch.float32)}
 
 class Position(Featurizer):
-
+    #  position: [x, y]
     def get_observation_space(self, task):
-        return {'position': (2, )}
+        return {'position': (2,)}
 
     def featurize(self, task):
-        feat = [0, 0]
-        valid = set(M.BaseMonster.valid_moves)
-        if task.agent is not None and task.agent.position is not None:
-            x, y = task.agent.position
-            feat = [x, y]
-        return {'position': torch.tensor(feat, dtype=torch.long)}
+        pos = task.tocell[task.state.position_n]
+        return {'position': torch.tensor(pos, dtype=torch.float32)}
 
 
 class RelativePosition(Featurizer):
-
+    #  relative position to the map, size=(Row, Col, 2)
+    #  rel_pos[:, i, 0] = (i - x) / Col
+    #  rel_pos[i, :, 1] = (i - y) / Row
     def get_observation_space(self, task):
-        return {'rel_pos': (task.world.height, task.world.width, 2)}
+        return {'rel_pos': (task.Row, task.Col, 2)}
 
     def featurize(self, task):
-        x_offset = torch.Tensor(task.world.height, task.world.width).zero_()
-        y_offset = torch.Tensor(task.world.height, task.world.width).zero_()
-        if task.agent is not None and task.agent.position is not None:
-            x, y = task.agent.position
-            for i in range(task.world.width):
-                x_offset[:, i] = i - x
-            for i in range(task.world.height):
-                y_offset[i, :] = i - y
-        return {'rel_pos': torch.stack([x_offset/task.world.width, y_offset/task.world.height], dim=2)}
+        x_offset = torch.Tensor(task.Row, task.Col).zero_()
+        y_offset = torch.Tensor(task.Row, task.Col).zero_()
+        # x, y = task.tocell[task.state.position_n]
+        # for i in range(task.Row):
+        #     x_offset[i, :] = i - x
+        # for i in range(task.Col):
+        #     y_offset[:, i] = i - y
+        # We don't offer the position infomation.
+        return {'rel_pos': torch.stack([x_offset / task.Col, y_offset / task.Row], dim=2)}
 
 
 class WikiExtract(Featurizer):
@@ -111,101 +93,28 @@ class Progress(Featurizer):
 
     def featurize(self, task):
         return {'progress': torch.tensor([task.iter / task.max_iter], dtype=torch.float)}
+    
+    
+def clear():
+    if os.name == 'posix':
+        _ = os.system('cls')
+    else:
+        _ = os.system('clear')
 
 
 class Terminal(Featurizer):
-
+    #  print terminal info
     def get_observation_space(self, task):
         return {}
 
-    def clear(self):
-        # for windows
-        if os.name == 'nt':
-            _ = os.system('cls')
-            # for mac and linux(here, os.name is 'posix')
-        else:
-            _ = os.system('clear')
-
     def featurize(self, task):
-        self.clear()
-        print("\r")
-        print(task.world.render(perspective=task.perspective))
-
-        print('-' * 80)
-        print('Wiki')
-        print(task.get_wiki())
-        print('Task:')
-        print(task.get_task())
-        print('Inventory:')
-        print(task.get_inv())
-
-        print('-' * 80)
-        print('Last turn:')
-        print('-' * 80)
-        if task.history:
-            for event in task.history[-1]:
-                print(event)
-
-        print('-' * 80)
-        print('Monsters:')
-        print('-' * 80)
-        for m in task.world.monsters:
-            print('{}: {}'.format(m.char, m))
-            print(m.describe())
-            print()
-
-        print('-' * 80)
-        print('Items:')
-        print('-' * 80)
-        for m in task.world.items:
-            print('{}: {}'.format(m.char, m))
-            print(m.describe())
-            print()
-
-        print()
-        pprint(M.Player.keymap)
-        return {}
-
-
-class Symbol(Featurizer):
-
-    class_list = [
-        O.Empty,
-        O.Unobservable,
-
-        O.Wall,
-        O.Door,
-
-        M.HostileMonster,
-
-        M.QueuedAgent,
-    ]
-
-    class_map = {c: i for i, c in enumerate(class_list)}
-
-    def __init__(self):
-        self.num_symbols = len(self.class_list)
-
-    def get_observation_space(self, task):
-        return {
-            'symbol': (*task.world_shape, task.max_placement),
-        }
-
-    def featurize(self, task):
-        mat = task.world.get_observation(perspective=task.perspective, max_placement=task.max_placement)
-        smat = []
-        for y in range(0, len(mat)):
-            row = []
-            for x in range(0, len(mat[0])):
-                os = mat[y][x]
-                classes = [self.class_map[o.__class__] for o in os]
-                row.append(classes)
-            smat.append(row)
-        return {'symbol': torch.tensor(smat, dtype=torch.long)}
+        clear()
+        reward = np.sum(task.state.cum_reward)
+        iteration = task.iter
+        print('total reward: ' + str(reward) + ', iteration: ' + str(iteration))
 
 
 class Text(Featurizer):
-
     def __init__(self, max_cache=1e6):
         super().__init__()
         self._cache = {}
@@ -213,68 +122,46 @@ class Text(Featurizer):
 
     def get_observation_space(self, task):
         return {
-            'name': (*task.world_shape, task.max_placement, task.max_name),
-            'name_len': (*task.world_shape, task.max_placement),
-            'inv': (task.max_inv, ),
-            'inv_len': (1, ),
-            'wiki': (task.max_wiki, ),
-            'wiki_len': (1, ),
-            'task': (task.max_task, ),
-            'task_len': (1, ),
+            'name': (task.Row, task.Col, task.max_placement, task.max_name),
+            'name_len': (task.Row, task.Col, task.max_placement),
+            'inv': (task.max_inv,),
+            'inv_len': (1,),
+            'wiki': (task.max_wiki,),
+            'wiki_len': (1,),
+            'task': (task.max_task,),
+            'task_len': (1,),
         }
 
     def featurize(self, task, eos='pad', pad='pad'):
-        mat = task.world.get_observation(perspective=task.perspective, max_placement=task.max_placement)
+        # use words to describe the map
         smat = []
         lmat = []
-        for y in range(0, len(mat)):
+        for x in range(0, task.Row):
             srow = []
             lrow = []
-
-            for x in range(0, len(mat[0])):
-                names = []
-                lengths = []
-                for o in mat[y][x]:
-                    n, l = self.lookup_sentence(o.describe(), task.vocab, max_len=task.max_name, eos=eos, pad=pad)
-                    names.append(n)
-                    lengths.append(l)
+            for y in range(0, task.Col):
+                names, lens = task.read_pos(x, y, eos, pad)
+                empty_name, empty_length = read_things(task.vocab, 'empty', task.max_name, eos, pad)
+                names = names[:task.max_placement]
+                lens = lens[:task.max_placement]
+                names += [empty_name] * (task.max_placement - len(names))
+                lens += [empty_length] * (task.max_placement - len(lens))
                 srow.append(names)
-                lrow.append(lengths)
+                lrow.append(lens)
             smat.append(srow)
             lmat.append(lrow)
-        wiki, wiki_length = self.lookup_sentence(task.get_tokenized_wiki() if hasattr(task, 'get_tokenized_wiki') else task.get_wiki(), task.vocab, max_len=task.max_wiki, eos=eos, pad=pad)
-        ins, ins_length = self.lookup_sentence(task.get_tokenized_task() if hasattr(task, 'get_tokenized_task') else task.get_task(), task.vocab, max_len=task.max_task, eos=eos, pad=pad)
-        inv, inv_length = self.lookup_sentence(task.get_inv(), task.vocab, max_len=task.max_inv, eos=eos, pad=pad)
+        wiki, wiki_len = read_things(task.vocab, task.read_model(), task.max_wiki, eos, pad)
+        ins, ins_len = read_things(task.vocab, [], task.max_task, eos, pad)
+        inv, inv_len = read_things(task.vocab, [], task.max_inv, eos, pad)
         ret = {
             'name': smat,
             'name_len': lmat,
             'inv': inv,
-            'inv_len': [inv_length],
+            'inv_len': [inv_len],
             'wiki': wiki,
-            'wiki_len': [wiki_length],
+            'wiki_len': [wiki_len],
             'task': ins,
-            'task_len': [ins_length],
+            'task_len': [ins_len]
         }
         ret = {k: torch.tensor(v, dtype=torch.long) for k, v in ret.items()}
         return ret
-
-    def lookup_sentence(self, sent, vocab, max_len=10, eos='pad', pad='pad'):
-        if isinstance(sent, list):
-            words = sent[:max_len-1] + [eos]
-            length = len(words)
-            if len(words) < max_len:
-                words += [pad] * (max_len - len(words))
-            return vocab.word2index([w.strip() for w in words]), length
-        else:
-            sent = sent.lower()
-            key = sent, max_len
-            if key not in self._cache:
-                words = revtok.tokenize(sent)[:max_len-1] + [eos]
-                length = len(words)
-                if len(words) < max_len:
-                    words += [pad] * (max_len - len(words))
-                self._cache[key] = vocab.word2index([w.strip() for w in words]), length
-                while len(self._cache) > self.max_cache:
-                    keys = list(self._cache.keys())
-                    del self._cache[random.choice(keys)]
-            return self._cache[key]
