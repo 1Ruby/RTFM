@@ -18,8 +18,11 @@ import os
 import sys
 import tqdm
 import importlib
+import cv2
+from copy import deepcopy
 
 os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 import threading
 import time
@@ -33,11 +36,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch import multiprocessing as mp
+from torch.utils.tensorboard import SummaryWriter
 
 import gym
 import random
 import exp_utils
 from rtfm import tasks
+from GridWorld import gridworld
 
 from core import environment
 from core import file_writer
@@ -46,6 +51,7 @@ from core import vtrace
 
 
 Net = None
+write_path = None
 
 
 logging.basicConfig(
@@ -82,7 +88,7 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 def act(i: int, free_queue: mp.SimpleQueue, full_queue: mp.SimpleQueue,
         model: torch.nn.Module, buffers: Buffers, flags):
     try:
-        logging.info('Actor %i started.', i)
+        logging.info(flags.mode.capitalize() + ' actor %i started.', i)
         timings = prof.Timings()  # Keep track of how fast things are.
 
         gym_env = Net.create_env(flags)
@@ -90,6 +96,21 @@ def act(i: int, free_queue: mp.SimpleQueue, full_queue: mp.SimpleQueue,
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
+        epoch = 0
+        episode = 0
+        
+        if i == 0 or (flags.fix_env and i < flags.log_actors):
+            tag = flags.mode + ' actor ' + str(i)
+            writer = SummaryWriter(write_path + '/' + tag)
+            if hasattr(env.gym_env, 'color_render'):
+                img = torch.tensor(env.gym_env.color_render()).transpose(0, 2).transpose(1, 2)
+            else:
+                img = torch.tensor(env.gym_env.color_render()).transpose(0, 2).transpose(1, 2)
+            writer.add_image(tag, img, 0)
+        else:
+            tag = None
+            writer = None
+            
         agent_output = model(env_output)
         while True:
             index = free_queue.get()
@@ -112,6 +133,15 @@ def act(i: int, free_queue: mp.SimpleQueue, full_queue: mp.SimpleQueue,
                 timings.time('model')
 
                 env_output = env.step(agent_output['action'])
+                epoch += 1
+                if (i == 0 or (flags.fix_env and i < flags.log_actors)) and episode % 1e4 == 0:
+                    if hasattr(env.gym_env, 'color_render'):
+                        img = torch.tensor(env.gym_env.color_render()).transpose(0, 2).transpose(1, 2)
+                    else:
+                        img = torch.tensor(env.gym_env.render()).transpose(0, 2).transpose(1, 2)
+                    writer.add_image(tag, img, epoch)
+                if env_output['done']:
+                    episode += 1
 
                 timings.time('step')
 
@@ -159,6 +189,21 @@ def get_batch(free_queue: mp.SimpleQueue,
     }
     timings.time('device')
     return batch
+
+def get_test(batch, flags, lock=threading.Lock()):
+    with lock:
+        batch = {key: tensor[1:] for key, tensor in batch.items()}
+        episode_returns = batch['episode_return'][batch['done']]
+        episode_lens = batch['episode_step'][batch['done']]
+        won = batch['win'][batch['win'] != -1]
+        regret = batch['episode_regret'][batch['episode_regret'] != -1]
+        stats_test = {
+            'win_rate_test': torch.mean(won.float()).item(),
+            'eplen_test': torch.mean(episode_lens.float()).item(),
+            'episode_return_test': torch.mean(episode_returns).item(),
+            'episode_regret_test': torch.mean(regret.float()).item()
+        }
+        return stats_test
 
 
 def learn(actor_model,
@@ -223,17 +268,21 @@ def learn(actor_model,
 
         episode_returns = batch['episode_return'][batch['done']]
         episode_lens = batch['episode_step'][batch['done']]
-        won = batch['reward'][batch['done']] > 0.8
+        won = batch['win'][batch['win'] != -1]
+        regret = batch['episode_regret'][batch['episode_regret'] != -1]
         stats = {
             'mean_win_rate': torch.mean(won.float()).item(),
             'mean_episode_len': torch.mean(episode_lens.float()).item(),
             'mean_episode_return': torch.mean(episode_returns).item(),
+            'mean_episode_regret': torch.mean(regret.float()).item(),
             'total_loss': total_loss.item(),
             'pg_loss': pg_loss.item(),
             'baseline_loss': baseline_loss.item(),
             'entropy_loss': entropy_loss.item(),
             'aux_loss': aux_loss.item(),
         }
+
+        # learn_flag = True in (batch['reward'] != -0.1)
 
         optimizer.zero_grad()
         model.zero_grad()
@@ -252,8 +301,10 @@ def create_buffers(observation_shapes, num_actions, flags) -> Buffers:
     specs = dict(
         reward=dict(size=(T + 1,), dtype=torch.float32),
         done=dict(size=(T + 1,), dtype=torch.bool),
+        win=dict(size=(T + 1,), dtype=torch.int32),
         episode_return=dict(size=(T + 1,), dtype=torch.float32),
         episode_step=dict(size=(T + 1,), dtype=torch.int32),
+        episode_regret=dict(size=(T + 1,), dtype=torch.float32),
         last_action=dict(size=(T + 1,), dtype=torch.int64),
         policy_logits=dict(size=(T + 1, num_actions), dtype=torch.float32),
         baseline=dict(size=(T + 1,), dtype=torch.float32),
@@ -293,9 +344,16 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info('Not using CUDA.')
         flags.device = torch.device('cpu')
 
+    flags_test = deepcopy(flags)
+    flags_test.mode = 'test'
+    flags_test.num_actors = flags.test_actors
+    flags_test.num_buffers = 2 * flags_test.num_actors
+    flags_test.batch_size = flags_test.num_actors
+
     env = Net.create_env(flags)
     model = Net.make(flags, env)
-    buffers = create_buffers(env.observation_space, len(env.action_space), flags)
+    buffers = create_buffers(env.observation_space, env.action_space.n, flags)
+    buffers_test = create_buffers(env.observation_space, env.action_space.n, flags_test)
 
     model.share_memory()
 
@@ -303,11 +361,20 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     ctx = mp.get_context('fork')
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
+    free_queue_test = ctx.SimpleQueue()
+    full_queue_test = ctx.SimpleQueue()
 
     for i in range(flags.num_actors):
         actor = ctx.Process(
             target=act,
             args=(i, free_queue, full_queue, model, buffers, flags))
+        actor.start()
+        actor_processes.append(actor)
+        
+    for i in range(flags_test.num_actors):
+        actor = ctx.Process(
+            target=act,
+            args=(i, free_queue_test, full_queue_test, model, buffers_test, flags_test))
         actor.start()
         actor_processes.append(actor)
 
@@ -343,21 +410,28 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     stat_keys = [
         'total_loss',
         'mean_episode_return',
+        'episode_return_test',
+        'mean_episode_regret',
+        'episode_regret_test',
         'pg_loss',
         'baseline_loss',
         'entropy_loss',
         'aux_loss',
         'mean_win_rate',
+        'win_rate_test',
         'mean_episode_len',
+        'eplen_test',
     ]
     logger.info('# Step\t%s', '\t'.join(stat_keys))
 
     frames, stats = 0, {}
+    writer = SummaryWriter(write_path+'/log')
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
         nonlocal frames, stats
         timings = prof.Timings()
+        timings_test = prof.Timings()
         while frames < flags.total_frames:
             timings.reset()
             batch = get_batch(free_queue, full_queue, buffers, flags, timings)
@@ -365,9 +439,16 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             stats = learn(model, learner_model, batch, optimizer, scheduler,
                           flags)
             timings.time('learn')
+            
+            timings_test.reset()
+            batch_test = get_batch(free_queue_test, full_queue_test, buffers_test, flags_test, timings_test)
+            stats_test = get_test(batch_test, flags_test)
+            timings_test.time('test')
+            
             with lock:
                 to_log = dict(frames=frames)
-                to_log.update({k: stats[k] for k in stat_keys})
+                to_log.update({k: stats.get(k, None) or stats_test.get(k, None) or 0 for k in stat_keys})
+                writer.add_scalars('log', to_log, frames)
                 plogger.log(to_log)
                 frames += T * B
 
@@ -376,6 +457,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     for m in range(flags.num_buffers):
         free_queue.put(m)
+    for m in range(flags_test.num_buffers):
+        free_queue_test.put(m)
 
     threads = []
     for i in range(flags.num_threads):
@@ -426,6 +509,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     finally:
         for _ in range(flags.num_actors):
             free_queue.put(None)
+        for _ in range(flags_test.num_actors):
+            free_queue_test.put(None)
         for actor in actor_processes:
             actor.join(timeout=1)
 
@@ -453,6 +538,11 @@ def test(flags, num_eps: int = 1000):
         model.load_state_dict(checkpoint['model_state_dict'])
 
     observation = env.initial()
+    if flags.mode == 'test_render':
+        print(env.gym_env.state.descr)
+        print('step action reward')
+        cv2.imshow('img', np.flip(env.gym_env.render(), -1))
+        cv2.waitKey(0)
     returns = []
     won = []
     entropy = []
@@ -467,6 +557,7 @@ def test(flags, num_eps: int = 1000):
                 observation = env.step(action)
             else:
                 agent_outputs = model(observation)
+                action = agent_outputs['action'].item()
                 observation = env.step(agent_outputs['action'])
                 policy = F.softmax(agent_outputs['policy_logits'], dim=-1)
                 log_policy = F.log_softmax(agent_outputs['policy_logits'], dim=-1)
@@ -475,6 +566,15 @@ def test(flags, num_eps: int = 1000):
 
             steps += 1
             done = observation['done'].item()
+            
+            if flags.mode == 'test_render':
+                cv2.imshow('img', np.flip(env.gym_env.render(), -1))
+                print('%d: ' % steps + '%d ' % action + '%.1f' % observation['reward'][0][0].item())
+                k = cv2.waitKey(0)
+                if k == 27 or k == 113:
+                    won.append(0)
+                    break
+                    
             if observation['done'].item():
                 returns.append(observation['episode_return'].item())
                 won.append(observation['reward'][0][0].item() > 0.5)
@@ -490,12 +590,16 @@ def test(flags, num_eps: int = 1000):
                     print('Done: {}'.format('You won!!' if won[-1] else 'You lost!!'))
                     print('Episode steps: {}'.format(observation['episode_step']))
                     print('Episode return: {}'.format(observation['episode_return']))
-                    done_seconds = os.environ.get('DONE', None)
-                    if done_seconds is None:
-                        print('Press Enter to continue')
-                        input()
-                    else:
-                        time.sleep(float(done_seconds))
+                    # done_seconds = os.environ.get('DONE', None)
+                    # if done_seconds is None:
+                    #     print('Press Enter to continue')
+                    #     input()
+                    # else:
+                    #     time.sleep(float(done_seconds))
+        if flags.mode == 'test_render':
+            cv2.destroyAllWindows()
+            env.close()
+            return
 
     env.close()
     logging.info('Average returns over %i episodes: %.2f. Win rate: %.2f. Entropy: %.2f. Len: %.2f', num_eps, sum(returns)/len(returns), sum(won)/len(returns), sum(entropy)/max(1, len(entropy)), sum(ep_len)/len(ep_len))
@@ -506,6 +610,9 @@ def main(flags):
 
     global Net
     Net = importlib.import_module('model.{}'.format(flags.model)).Model
+
+    global write_path
+    write_path = './runs/' + flags.xpid
 
     if flags.mode == 'train':
         train(flags)
