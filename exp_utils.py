@@ -22,6 +22,7 @@ def get_parser():
     parser.add_argument('--mode', default='train',
                         choices=['train', 'test', 'test_render'],
                         help='Training or test mode.')
+    parser.add_argument('--modeuse', default='default', choices=['default', 'train', 'test'])
     parser.add_argument('--xpid', default=None,
                         help='Experiment id. Autopopulated if not filled.')
     parser.add_argument('--prefix', default='default', help='xp identifier')
@@ -55,6 +56,8 @@ def get_parser():
                         help='Root dir where experiment data will be saved.')
     parser.add_argument('--num_actors', default=30, type=int, metavar='N',
                         help='Number of actors.')
+    parser.add_argument('--test_actors', default=3, type=int, metavar='N',
+                        help='Number of test actors.')
     parser.add_argument('--total_frames', default=int(1e8), type=int, metavar='T',
                         help='Total environment frames to train for.')
     parser.add_argument('--batch_size', default=24, type=int, metavar='B',
