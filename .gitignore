@@ -2,6 +2,7 @@
 checkpoints/
 runs/
 logs/
+images/
 *.ipynb
 .ipynb_checkpoints/
 __pycache__/
